@@ -14,19 +14,25 @@ with st.sidebar:
     uploaded = st.file_uploader("shift_schedule.csv", type=["csv"])
     if uploaded:
         with st.spinner("Sending to pipeline..."):
-            r = requests.post(
-                f"{API_URL}/upload",
-                files={"file": (uploaded.name, uploaded.getvalue(), "text/csv")},
-                data={"trigger_source": "supervisor"}
-            )
-        if r.status_code == 200:
-            result = r.json()
-            if result["status"] == "debounced":
-                st.warning("Same file already processing — skipped.")
-            else:
-                st.success(f"✅ Uploaded. Pipeline running...")
-        else:
-            st.error("Upload failed — check API connection.")
+            try:
+                r = requests.post(
+                    f"{API_URL}/upload",
+                    files={"file": (uploaded.name, uploaded.getvalue(), "text/csv")},
+                    data={"trigger_source": "supervisor"},
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    result = r.json()
+                    if result["status"] == "debounced":
+                        st.warning("Same file already processing — skipped.")
+                    else:
+                        st.success("✅ Uploaded. Pipeline running...")
+                else:
+                    st.error("Upload failed — check API connection.")
+            except requests.exceptions.ConnectionError:
+                st.error(f"❌ Cannot reach API at `{API_URL}`. Is the backend deployed?")
+            except requests.exceptions.Timeout:
+                st.error("❌ API request timed out.")
 
 # ── Fetch state ──────────────────────────────────────────────
 try:
