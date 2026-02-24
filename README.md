@@ -1,180 +1,259 @@
 # HRCA — Human-Robot Coordination Agent
 
-**Titan Manufacturing | Minimum Viable Agent (v1 — Free Tier)**
+**Titan Manufacturing | v2 — FastAPI + Streamlit (Free Tier)**
 
-A lightweight Python agent that watches shift schedules and robot cell states, detects when a human and an active robot might be in the same zone, and sends an alert to the supervisor.
+A two-service system that detects when a human operator is scheduled in a zone where a robot is active, generates a plain-language alert via LLM, and displays it on a live dashboard. No hardware changes required.
 
-No cloud. No Kubernetes. No enterprise contracts. **Total ongoing cost: $0/month.**
-
----
-
-## Problem
-
-**Undetected human presence in active robot zones** — the root cause of most safety shutdowns and quality overrides. 17 % of shifts have conflicts. This agent catches them before they become incidents.
+**Total ongoing cost: $0/month.**
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│           hrca.py (runs locally)        │
-│                                         │
-│  1. Load shift_schedule.csv             │
-│  2. Poll robot_status.json (or API)     │
-│  3. Check for conflicts (rule-based)    │
-│  4. If conflict → call LLM for alert   │
-│  5. Send alert via email or Slack       │
-│  6. Log to events.csv                   │
-│                                         │
-│  Runs every 30 seconds via scheduler    │
-└─────────────────────────────────────────┘
+Plant Network / MES                 Cloud (Free)
+───────────────────                 ──────────────────────────────
+MES/HR drops CSV        →           Railway — api/
+  HTTP POST /upload                   FastAPI receives upload
+  trigger_source=machine              run_pipeline()
+                                       check_schedule()
+Supervisor laptop        →             check_robot_state()
+  Streamlit dashboard                  send_alert() → Slack/email
+  uploads CSV manually                 log_event() → SQLite
+  → POST /upload
+
+                                    Streamlit Cloud — dashboard/
+                                      reads /state and /events
+                                      shows live dashboard
+                                      supervisor upload widget
+                                      auto-refresh every 30s
 ```
+
+**Why two services:** Streamlit Cloud is stateless — it cannot receive HTTP POSTs from external systems or maintain a persistent filesystem. FastAPI on Railway handles all pipeline logic and writes to SQLite. Streamlit only reads and displays.
 
 ---
 
 ## File Structure
 
 ```
-hrca/
-├── hrca.py              ← main agent loop
-├── tools.py             ← schedule + robot state tools
-├── alert.py             ← email / Slack sender
-├── shift_schedule.csv   ← updated each shift
-├── robot_status.json    ← updated by PLC / manual
-├── events.csv           ← audit log
-├── .env                 ← API keys (never commit this)
-├── requirements.txt
+hrca-agent/
+├── api/                        ← FastAPI service (deploys to Railway)
+│   ├── main.py                 ← /upload, /state, /events, /health
+│   ├── pipeline.py             ← run_pipeline(csv_path, trigger_source)
+│   ├── tools.py                ← check_schedule(), check_robot_state()
+│   ├── alert.py                ← send_alert() — Slack first, email fallback
+│   ├── db.py                   ← SQLite init, get_state, log_event
+│   ├── requirements.txt
+│   └── Procfile                ← Railway start command
+│
+├── dashboard/                  ← Streamlit service (deploys to Streamlit Cloud)
+│   ├── app.py                  ← Live dashboard + supervisor upload
+│   └── requirements.txt
+│
+├── data/
+│   ├── hrca.db                 ← SQLite (auto-created on first run)
+│   ├── robot_status.json       ← Stand-in for OPC-UA/PLC feed
+│   ├── shift_schedule.csv      ← Sample schedule
+│   └── incoming/               ← Uploaded CSVs (auto-managed)
+│       └── archive/
+│
+├── .env                        ← API keys (never commit)
+├── .gitignore
+├── CLAUDE.md
 └── README.md
 ```
 
 ---
 
-## Deployment Steps
+## Local Development (Two Terminals)
 
-### Step 1 — Install dependencies (15 minutes)
+### Prerequisites
 
-Requires **Python 3.10+**.
+- Python 3.11+
+- A [Groq API key](https://console.groq.com) (free tier)
+- Optional: Slack Incoming Webhook URL or Gmail App Password for real alerts
 
-```bash
-pip install -r requirements.txt
-```
-
-Or install manually:
+### Setup
 
 ```bash
-pip install langchain langchain-groq pandas requests schedule python-dotenv
+# 1. Clone the repo
+git clone https://github.com/Fenear/agentic-ai-human-robot-coordination-smart-manufacturing
+cd agentic-ai-human-robot-coordination-smart-manufacturing
+
+# 2. Install API dependencies
+cd api && pip install -r requirements.txt && cd ..
+
+# 3. Install dashboard dependencies
+cd dashboard && pip install -r requirements.txt && cd ..
+
+# 4. Configure environment
+# Edit .env and set your GROQ_API_KEY and (optionally) SLACK_WEBHOOK_URL
 ```
 
-### Step 2 — Get a free LLM
-
-**Option A: Groq (recommended — fast, free tier)**
-
-1. Sign up at [console.groq.com](https://console.groq.com)
-2. Create an API key
-3. Paste the key in `.env` under `GROQ_API_KEY`
-4. Uses `llama3-8b-8192` model — free up to ~15 K requests/day
-
-**Option B: Ollama (fully local, no internet)**
+### Terminal 1 — Start the API
 
 ```bash
-# Install Ollama (https://ollama.com), then:
-ollama pull llama3
+cd api
+uvicorn main:app --reload --port 8000
 ```
 
-- Runs entirely on the plant network
-- Needs a PC with 8 GB+ RAM
-- Swap `ChatGroq` for `ChatOllama` in `hrca.py` to use this option
+The API will be available at `http://localhost:8000`.
+- `GET /health` → `{"status": "ok"}`
+- `GET /state` → current pipeline state from SQLite
+- `GET /events` → recent conflict events
+- `POST /upload` → trigger pipeline with a CSV file
 
-### Step 3 — Prepare your data files
+### Terminal 2 — Start the Dashboard
 
-**shift_schedule.csv** — exported from HR at the start of each shift:
-
+```bash
+cd dashboard
+HRCA_API_URL=http://localhost:8000 streamlit run app.py
 ```
+
+Open `http://localhost:8501` in your browser. The dashboard will connect to the API and auto-refresh every 30 seconds.
+
+### Test the Pipeline
+
+```bash
+# POST the sample schedule directly (simulates MES machine upload)
+curl -X POST http://localhost:8000/upload \
+  -F "file=@data/shift_schedule.csv" \
+  -F "trigger_source=machine"
+
+# Check state
+curl http://localhost:8000/state
+
+# Check events
+curl http://localhost:8000/events
+```
+
+**Note:** `data/robot_status.json` must be less than 60 seconds old. If you see `status: error` with `stale_data`, touch the file to refresh it:
+
+```bash
+# Linux/Mac
+touch data/robot_status.json
+
+# Windows (PowerShell)
+(Get-Item data\robot_status.json).LastWriteTime = Get-Date
+```
+
+---
+
+## Deploy FastAPI to Railway
+
+1. Push your repo to GitHub (already done)
+2. Go to [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub**
+3. Select your repo, set **Root Directory** to `api/`
+4. Add environment variables in the Railway dashboard:
+   ```
+   GROQ_API_KEY=your_groq_key
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+   LLM_MODEL=llama3-8b-8192
+   STALE_THRESHOLD_SEC=60
+   ```
+5. Railway will detect `Procfile` and start:
+   ```
+   web: uvicorn main:app --host 0.0.0.0 --port $PORT
+   ```
+6. Note your public URL: `https://hrca-xxxx.up.railway.app`
+
+---
+
+## Deploy Dashboard to Streamlit Cloud
+
+1. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**
+2. Repo: your GitHub repo | Branch: `main` | File: `dashboard/app.py`
+3. **Advanced settings → Secrets** — add:
+   ```toml
+   HRCA_API_URL = "https://hrca-xxxx.up.railway.app"
+   ```
+4. Click **Deploy**
+
+The dashboard will pull live state and events from your Railway API.
+
+---
+
+## Machine Upload (MES/HR System)
+
+Configure your MES or HR system to POST the shift CSV automatically at shift start:
+
+**curl (from any system on the plant network):**
+
+```bash
+curl -X POST https://hrca-xxxx.up.railway.app/upload \
+  -F "file=@shift_schedule.csv" \
+  -F "trigger_source=machine"
+```
+
+**Python (from MES integration script):**
+
+```python
+import requests
+
+with open("shift_schedule.csv", "rb") as f:
+    requests.post(
+        "https://hrca-xxxx.up.railway.app/upload",
+        files={"file": f},
+        data={"trigger_source": "machine"}
+    )
+```
+
+The API responds immediately with `{"status": "accepted"}` and runs the pipeline in a background thread.
+
+---
+
+## Schedule CSV Format
+
+```csv
 name, badge_id, cell, shift_start, shift_end
-Kim Chen, 4412, cell_7, 13:00, 14:00
-Marco Rivera, 5531, cell_3, 13:00, 17:00
+Kim Chen, 4412, cell_7, 06:00, 14:00
+Marco Rivera, 5531, cell_3, 06:00, 14:00
+Aisha Patel, 6678, cell_14, 14:00, 22:00
 ```
 
-**robot_status.json** — updated by PLC vendor API or manually:
+Times are 24-hour `HH:MM`. Cell names must match keys in `robot_status.json`.
+
+---
+
+## Robot Status Format
+
+`data/robot_status.json` (temporary stand-in for OPC-UA/PLC feed):
 
 ```json
 {"cell_7": "active", "cell_3": "idle", "cell_14": "active"}
 ```
 
-### Step 4 — Configure alerts
-
-**Slack (easiest):**
-
-1. Create a free Slack workspace (or use an existing one)
-2. Add an **Incoming Webhook** integration
-3. Paste the webhook URL in `.env` under `SLACK_WEBHOOK_URL`
-4. Set `ALERT_METHOD=slack` in `.env`
-
-**Email (SMTP):**
-
-1. Use any Gmail account with an [App Password](https://support.google.com/accounts/answer/185833)
-2. Fill in the SMTP fields in `.env`
-3. Set `ALERT_METHOD=email` in `.env`
-
-### Step 5 — Run it
-
-```bash
-python hrca.py
-```
-
-The agent starts polling every 30 seconds. Check `events.csv` for the audit log.
-
----
-
-## Example Run
-
-**Trigger:** Cell 7 is active. Schedule shows Operator Kim assigned to Cell 7 but shift ended 10 min ago.
-
-**Agent reasoning:** Robot active + operator may still be present past scheduled time = conflict risk.
-
-**Alert sent:**
-
-> ⚠️ Cell 7 Alert: Operator Kim (Badge #4412) was scheduled to exit at 14:00 but cell is still active. Please confirm operator has cleared the zone. [14:23]
-
-**Outcome:** Supervisor checks, Kim had already left. Alert logged, no action needed. Cooldown applied.
+This file must be refreshed within 60 seconds or the pipeline will skip and log a `stale_data` event. Upgrade path: set `ROBOT_STATE_SOURCE` to a REST endpoint URL.
 
 ---
 
 ## Configuration Reference
 
-All settings live in `.env`:
+All settings in `.env` (see `.env` for full list):
 
-| Variable | Default | Description |
-|---|---|---|
-| `GROQ_API_KEY` | — | Your Groq API key |
-| `LLM_MODEL` | `llama3-8b-8192` | Groq model to use |
-| `ALERT_METHOD` | `slack` | `slack` or `email` |
-| `SLACK_WEBHOOK_URL` | — | Slack incoming webhook URL |
-| `SMTP_HOST` | `smtp.gmail.com` | SMTP server host |
-| `SMTP_PORT` | `587` | SMTP server port |
-| `SMTP_USER` | — | Email address for sending |
-| `SMTP_PASSWORD` | — | Email app password |
-| `ALERT_EMAIL_TO` | — | Supervisor email address |
-| `SCHEDULE_CSV` | `shift_schedule.csv` | Path to schedule file |
-| `ROBOT_STATUS_SOURCE` | `robot_status.json` | Path or URL for robot status |
-| `EVENTS_CSV` | `events.csv` | Path to audit log |
-| `POLL_INTERVAL_SEC` | `30` | Seconds between polling cycles |
-| `COOLDOWN_MIN` | `5` | Minutes before re-alerting same cell |
-| `STALE_THRESHOLD_SEC` | `60` | Max age (seconds) of robot status data |
+| Variable | Description |
+|---|---|
+| `GROQ_API_KEY` | Groq API key (required) |
+| `LLM_MODEL` | Groq model (default: `llama3-8b-8192`) |
+| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL |
+| `SMTP_EMAIL` / `SMTP_PASSWORD` | Gmail for email fallback |
+| `ALERT_RECIPIENT` | Supervisor email address |
+| `STALE_THRESHOLD_SEC` | Max age of robot data in seconds (default: 60) |
+| `HRCA_API_URL` | FastAPI URL for Streamlit to connect to |
 
 ---
 
 ## Guardrails
 
-| Risk | Mitigation |
+| Risk | Fix |
 |---|---|
-| Stale sensor data | Skips action if data > 60 s old; logs warning |
-| Too many false alerts | 5-minute cooldown per cell after each alert |
-| LLM unavailable | Fallback: sends raw rule-based alert without LLM |
-| Wrong operator name | Always shows both name + badge ID in alert |
+| Stale robot data | Pipeline skips and logs `stale_data` — never silently ignores |
+| Duplicate file uploads | MD5 hash debounce: same content within 10s is ignored |
+| LLM unavailable | Rule-based fallback alert — pipeline never stays silent |
+| Two supervisors on dashboard | All state in SQLite — no session-state conflicts |
+| FastAPI down | Streamlit shows last known state with "Pipeline Offline" banner |
 
-**Human-in-the-loop:** Every alert requires supervisor acknowledgement. The agent never takes physical action — humans decide what to do.
+**Human-in-the-loop:** Every alert requires supervisor acknowledgement. The agent never takes physical action.
 
 ---
 
@@ -182,47 +261,24 @@ All settings live in `.env`:
 
 | Layer | Tool | Cost |
 |---|---|---|
-| LLM | Groq API (free tier) or Ollama | $0 |
-| Language | Python 3.10+ | $0 |
-| Agent framework | LangChain (open source) | $0 |
-| Alerting | SMTP email or Slack webhook | $0 |
-| Storage | CSV files | $0 |
-| Hosting | Plant floor PC or Raspberry Pi | ~$50 one-time |
-| Scheduling | Python `schedule` library | $0 |
-
----
-
-## Stakeholders
-
-| Who | Role |
-|---|---|
-| Shift Supervisor | Receives alerts, takes action |
-| Floor Operator | Subject of schedule data |
-| IT Contact | Helps with network / email setup |
-
----
-
-## Limitations (v1)
-
-| What it can't do | Why | Future fix |
-|---|---|---|
-| Autonomous cell pause | No write access to PLC | Add OPC-UA write in v2 |
-| Predictive conflict (10 min ahead) | No ML model | Add time-series in v2 |
-| Multi-plant | Runs on one plant network | Duplicate or add central server |
-| Real-time sensor fusion | Depends on manual / basic JSON | Add IoT feed in v2 |
-| Learning from overrides | No memory | Add SQLite + embeddings in v2 |
+| LLM | Groq API (llama3-8b-8192, free tier) | $0/month |
+| Pipeline API | FastAPI + Python 3.11 | $0 |
+| Dashboard | Streamlit | $0 |
+| Shared state | SQLite (hrca.db) | $0 |
+| Alerting | Slack Incoming Webhook or SMTP | $0 |
+| API hosting | Railway (500 hrs/month free) | $0 |
+| Dashboard hosting | Streamlit Community Cloud | $0 |
 
 ---
 
 ## Upgrade Path
 
 ```
-v1 (Now — Free)          v2 (Low cost)            v3 (Full)
-─────────────────        ──────────────           ──────────────
-Local Python script  →   Cloud hosted (Railway)    AWS Bedrock + EKS
-Groq free tier       →   Claude Haiku (~$5/mo)     Claude Opus
-CSV schedules        →   MES API integration       Full MES + HRMS
-Email/Slack alerts   →   Dashboard (Streamlit)     React dashboard
-No memory            →   SQLite + RAG              OpenSearch vectors
-1 plant              →   3 plants                  28 plants
+v2 (Now — Free)          v3 (When needed)
+─────────────────         ──────────────────────────
+robot_status.json     →   OPC-UA / PLC REST feed
+SQLite                →   PostgreSQL (Railway add-on, ~$5/mo)
+Groq free tier        →   Claude Haiku API
+Single plant          →   Multi-plant (one Railway deploy per plant)
+No auth on /upload    →   API key header on /upload endpoint
 ```

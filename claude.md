@@ -1,5 +1,6 @@
-# claude.md — Titan Manufacturing (Minimal Free Version)
+# CLAUDE.md — Titan Manufacturing Corporation
 ## Human-Robot Coordination Agent (HRCA)
+### Version 2 — Updated Architecture (Free, Production-Realistic)
 
 ---
 
@@ -7,12 +8,13 @@
 
 **Primary Goal:** Detect robot-human scheduling conflicts on the plant floor and alert the right person in time to prevent safety incidents or downtime.
 
-**Why it matters:** 17% of shifts have conflicts. A simple agent watching sensor + schedule data and sending alerts can cut that significantly with zero hardware changes.
+**Why it matters:** 17% of shifts have conflicts. An agent watching schedule + robot state data and sending alerts can cut that significantly with zero hardware changes.
 
 **Success Metrics:**
 - Conflicts caught before incident: ≥ 60%
 - Alert delivered to supervisor in < 2 minutes
 - Zero false-positive shutdowns per week
+- Pipeline auto-triggers within 5 seconds of any new CSV (machine or manual)
 
 ---
 
@@ -21,20 +23,21 @@
 ```
 You are HRCA, a plant floor coordination assistant at Titan Manufacturing.
 
-You monitor shift schedules and sensor alerts to detect when a human operator 
-and an active robot cell are in conflict.
+You monitor shift schedules and robot cell states to detect when a human 
+operator and an active robot cell are in conflict.
 
 When you detect a conflict:
 1. Identify which cell, which operator, and what the risk is
 2. Send a clear plain-language alert to the shift supervisor
-3. Log the event
+3. Log the event with full context
 
 Rules:
-- Never act on sensor data older than 60 seconds
+- Never act on robot state data older than 60 seconds — flag it as stale
 - If unsure, always alert a human — do not guess
 - Keep every alert under 3 sentences
 - Never recommend firing or disciplining anyone
 - Always explain WHY you flagged something
+- If LLM is unavailable, fall back to rule-based alert — never stay silent
 ```
 
 ---
@@ -43,94 +46,157 @@ Rules:
 
 | Input | Source | How |
 |---|---|---|
-| Operator schedule | CSV export from HR system | Uploaded each shift start |
-| Robot cell status | Manual entry or basic sensor JSON | Polled every 30 sec |
-| Conflict trigger | Rule-based: human in zone + robot active | Local script |
+| Operator schedule | CSV from MES/HR system | POST to `/upload` endpoint (machine) or Streamlit UI (supervisor) |
+| Robot cell status | PLC/SCADA or robot_status.json (temp) | Polled every 30 sec via `check_robot_state()` |
+| Conflict trigger | Rule: human in zone + robot active | run_pipeline() function |
+
+**Note:** `robot_status.json` is a temporary stand-in for a proper OPC-UA or REST feed from PLCs. See upgrade path in context.md.
 
 ---
 
-## 4. Tools (Minimal Set)
+## 4. Tools
 
 | Tool | What it does | Free Option |
 |---|---|---|
 | `check_schedule` | Read shift CSV, find who's assigned where | Python + pandas |
-| `check_robot_state` | Poll robot cell status (JSON/API) | requests library |
-| `send_alert` | Notify supervisor | Email (SMTP) or Slack webhook |
-| `log_event` | Write to log file | Python logging → local CSV |
+| `check_robot_state` | Poll robot cell status from JSON or REST | requests library |
+| `send_alert` | Notify supervisor | Slack webhook or SMTP email |
+| `log_event` | Write structured event to SQLite | Python sqlite3 |
+| `get_pipeline_state` | Read current run state from SQLite | sqlite3 |
+| `set_pipeline_state` | Write trigger source, timestamp, conflicts to SQLite | sqlite3 |
 
 ---
 
 ## 5. Workflow
 
 ```
-Every 30 seconds:
-  1. Read robot cell states
-  2. Read current shift schedule
-  3. IF robot active AND operator assigned to same zone:
-       → Generate alert via LLM
-       → Send to supervisor (email/Slack)
-       → Log to CSV
-  4. ELSE: continue loop
+TRIGGER (either source)
+  → Machine: MES/HR POSTs CSV to FastAPI /upload
+  → Supervisor: uploads CSV via Streamlit → Streamlit POSTs to FastAPI /upload
+
+FastAPI receives file:
+  1. Save to incoming/ with UUID + timestamp filename
+  2. Archive any previous CSV to incoming/archive/
+  3. Call run_pipeline(csv_path, trigger_source)
+
+run_pipeline():
+  1. check_schedule(csv_path) → active operators per cell
+  2. check_robot_state() → active robot cells
+  3. Find overlaps (operator assigned to active robot cell)
+  4. For each conflict:
+       → Call LLM to generate alert text
+       → send_alert() via Slack/email
+       → log_event() to SQLite
+  5. set_pipeline_state() → write result to SQLite
+
+Streamlit dashboard:
+  → Reads SQLite every 30 seconds (st.rerun)
+  → Shows live status, conflicts, events log
+  → Supervisor upload → POST to FastAPI /upload
 ```
 
 ---
 
-## 6. Architecture Pattern
+## 6. Architecture
 
-**Simple ReAct loop** — single agent, no orchestration needed.
+**Split responsibilities: FastAPI handles pipeline, Streamlit handles UI**
 
 ```
-Sensor/Schedule Data
-        ↓
-   Python Script
-        ↓
-   LLM (reasoning + alert text)
-        ↓
-   Email / Slack → Supervisor
-        ↓
-   Log to CSV
+Plant Network / MES                 Cloud (Free)
+───────────────────                 ──────────────────────────────
+MES/HR drops CSV        →           Railway — FastAPI app
+  HTTP POST                           POST /upload (both sources)
+  to /upload                          run_pipeline()
+                                       check_schedule()
+Supervisor laptop        →             check_robot_state()
+  Streamlit UI                         send_alert()
+  uploads CSV                          log_event() → SQLite
+  → POST to /upload
+                                    Streamlit Cloud — app.py
+                                      reads SQLite (shared)
+                                      shows dashboard
+                                      supervisor upload widget
+                                      auto-refresh every 30s
 ```
 
-No cloud required. Runs on any laptop or cheap server on the plant network.
+**Why split:** Streamlit Cloud is stateless — it cannot run background processes, maintain a filesystem, or receive HTTP POSTs from external systems. FastAPI on Railway handles all pipeline logic and persists state to SQLite. Streamlit only reads and displays.
 
 ---
 
-## 7. Risks & Guardrails
+## 7. Shared State (SQLite)
 
-| Risk | Simple Fix |
+Single SQLite file `hrca.db` shared between FastAPI and Streamlit.
+
+```sql
+-- pipeline_state: one row, always updated
+CREATE TABLE pipeline_state (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  current_csv TEXT,           -- path to active CSV
+  trigger_source TEXT,        -- 'machine' or 'supervisor'
+  last_run_at TEXT,           -- ISO timestamp
+  active_conflicts INTEGER,   -- count
+  status TEXT                 -- 'ok', 'conflict', 'error'
+);
+
+-- events: append-only audit log
+CREATE TABLE events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT,
+  cell TEXT,
+  operator_name TEXT,
+  badge_id TEXT,
+  conflict_type TEXT,
+  alert_sent INTEGER,         -- 0 or 1
+  trigger_source TEXT,
+  alert_text TEXT
+);
+```
+
+---
+
+## 8. Risks & Guardrails
+
+| Risk | Fix |
 |---|---|
-| Stale sensor data | Skip action if data > 60s old; log warning |
-| Too many false alerts | Add 5-minute cooldown per cell after each alert |
-| LLM unavailable | Fallback: send raw rule-based alert without LLM reasoning |
-| Wrong operator name | Always show both name + badge ID in alert |
+| Stale robot data | Skip run if robot_status.json > 60s old; log warning to SQLite |
+| Duplicate file drops | Debounce: if same content hash arrives within 10s, ignore second |
+| Two supervisors open dashboard | Session state is per-user; all real state lives in SQLite |
+| LLM unavailable | Fallback rule-based alert — pipeline never silently skips |
+| Filename collision in archive | UUID + millisecond timestamp on every file |
+| FastAPI down | Streamlit shows last known state with 'Pipeline offline' banner |
 
-**Human-in-the-loop:** Every alert requires supervisor acknowledgement. Agent never takes physical action — humans decide what to do.
-
----
-
-## 8. Example Run
-
-**Trigger:** Cell 7 is active. Schedule shows Operator Kim assigned to Cell 7 but shift ended 10 min ago.
-
-**Agent reasoning:** Robot active + operator may still be present past scheduled time = conflict risk.
-
-**Alert sent:**
-> ⚠️ Cell 7 Alert: Operator Kim (Badge #4412) was scheduled to exit at 14:00 but cell is still active. Please confirm operator has cleared the zone. [14:23]
-
-**Outcome:** Supervisor checks, Kim had already left. Alert logged, no action needed. Cooldown applied.
+**Human-in-the-loop:** Every alert requires supervisor acknowledgement in the dashboard. Agent never takes physical action — humans decide.
 
 ---
 
-## 9. Tech Stack (All Free)
+## 9. Example Run
+
+**Trigger:** MES system POSTs `shift_14h00.csv` to FastAPI `/upload` at 13:58.
+
+**Pipeline:**
+1. File saved as `incoming/2024-01-15_135800_a3f9.csv`
+2. `check_schedule()` → Kim Chen (Badge #4412) assigned to Cell 7, 14:00–17:00
+3. `check_robot_state()` → Cell 7 active
+4. Conflict detected: operator scheduled to enter active cell at shift start
+5. LLM generates: *"⚠️ Cell 7: Kim Chen (Badge #4412) is scheduled to enter at 14:00 but cell is currently active. Confirm cell is clear before shift handover. [13:58]"*
+6. Slack alert sent, SQLite updated, dashboard refreshes
+
+**Outcome:** Supervisor sees alert at 13:59, radios to confirm cell clear. Conflict avoided. Logged.
+
+---
+
+## 10. Tech Stack (All Free)
 
 | Layer | Tool | Cost |
 |---|---|---|
-| LLM | Groq API (free tier) or Ollama (local llama3) | $0 |
-| Language | Python 3.10+ | $0 |
+| LLM | Groq API (free tier) — llama3-8b | $0/month |
+| Pipeline engine | FastAPI + Python 3.11 | $0 |
 | Agent framework | LangChain (open source) | $0 |
-| Alerting | SMTP email or Slack Incoming Webhook | $0 |
-| Storage | CSV files or SQLite | $0 |
-| Hosting | Plant floor PC or Raspberry Pi 4 | ~$50 one-time |
-| Scheduling | Python `schedule` library (cron-style) | $0 |
+| UI | Streamlit | $0 |
+| Shared state | SQLite (hrca.db) | $0 |
+| Alerting | Slack Incoming Webhook or SMTP | $0 |
+| Pipeline hosting | Railway (free tier — 500hrs/month) | $0 |
+| UI hosting | Streamlit Community Cloud | $0 |
+| Version control | GitHub | $0 |
 
 **Total ongoing cost: $0/month**

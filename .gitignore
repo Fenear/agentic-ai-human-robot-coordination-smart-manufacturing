@@ -1,5 +1,7 @@
 .env
-events.csv
 __pycache__/
 *.pyc
 .DS_Store
+data/hrca.db
+data/incoming/
+.claude/
