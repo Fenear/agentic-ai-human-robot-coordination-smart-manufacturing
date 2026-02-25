@@ -1,7 +1,7 @@
 import uuid, os, shutil
 from datetime import datetime
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
 from db import init_db, get_state, get_events
 from pipeline import run_pipeline
@@ -66,6 +66,32 @@ def get_pipeline_state():
 @app.get("/events")
 def get_recent_events(limit: int = 50):
     return get_events(limit)
+
+
+@app.post("/robot-status")
+async def update_robot_status(request: Request):
+    """Update robot cell states at runtime (replaces static robot_status.json).
+    Body: {"cell_7": "active", "cell_3": "idle", ...}
+    Writes to data/robot_status.json and touches its mtime so staleness check passes.
+    """
+    import json
+    body = await request.json()
+    robot_path = _ROOT / "data" / "robot_status.json"
+    os.makedirs(robot_path.parent, exist_ok=True)
+    with open(robot_path, "w") as f:
+        json.dump(body, f)
+    return {"status": "updated", "cells": body}
+
+
+@app.get("/robot-status")
+def get_robot_status():
+    """Return current robot cell states from robot_status.json."""
+    import json
+    robot_path = _ROOT / "data" / "robot_status.json"
+    if not robot_path.exists():
+        return {}
+    with open(robot_path) as f:
+        return json.load(f)
 
 
 @app.get("/health")
