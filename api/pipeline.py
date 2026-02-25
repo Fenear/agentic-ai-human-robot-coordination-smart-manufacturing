@@ -44,21 +44,26 @@ Rules:
 """
 
 
-def _gemini(prompt: str) -> str:
-    """Call Gemini REST API directly — no SDK, no gRPC."""
-    model = os.getenv("LLM_MODEL", "gemini-2.0-flash")
-    api_key = os.getenv("GOOGLE_API_KEY", "")
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta"
-        f"/models/{model}:generateContent"
+def _llm(prompt: str) -> str:
+    """Call Hugging Face Inference API (OpenAI-compatible endpoint)."""
+    model = os.getenv("LLM_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
+    token = os.getenv("HF_API_TOKEN", "")
+    url = "https://api-inference.huggingface.co/v1/chat/completions"
+    resp = _requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 256,
+        },
+        timeout=30,
     )
-    payload = {
-        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"parts": [{"text": prompt}]}],
-    }
-    resp = _requests.post(url, params={"key": api_key}, json=payload, timeout=30)
     resp.raise_for_status()
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+    return resp.json()["choices"][0]["message"]["content"]
 
 
 def run_pipeline(csv_path: str, trigger_source: str = "machine"):
@@ -117,7 +122,7 @@ def run_pipeline(csv_path: str, trigger_source: str = "machine"):
                 f"Robot status: ACTIVE\n"
                 f"Write the alert."
             )
-            alert_text = _gemini(prompt)
+            alert_text = _llm(prompt)
         except Exception as llm_exc:
             print(f"[HRCA] LLM error ({type(llm_exc).__name__}): {llm_exc}", flush=True)
             # Fallback: rule-based alert — never stay silent

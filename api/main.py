@@ -135,11 +135,11 @@ def health():
 @app.get("/debug")
 def debug():
     import sys
-    google_key = os.getenv("GOOGLE_API_KEY", "")
+    hf_token = os.getenv("HF_API_TOKEN", "")
     return {
         "python": sys.version,
-        "llm_backend": "gemini-rest",
-        "google_key_set": bool(google_key),
-        "google_key_prefix": google_key[:8] + "..." if google_key else "NOT SET",
-        "llm_model": os.getenv("LLM_MODEL", "gemini-2.0-flash"),
+        "llm_backend": "huggingface-rest",
+        "hf_token_set": bool(hf_token),
+        "hf_token_prefix": hf_token[:8] + "..." if hf_token else "NOT SET",
+        "llm_model": os.getenv("LLM_MODEL", "meta-llama/Llama-3.2-3B-Instruct"),
     }
