@@ -3,9 +3,9 @@ from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
-from db import init_db, get_state, get_events
+from db import init_db, get_state, get_events, set_state, log_event
 from pipeline import run_pipeline
-import hashlib, time
+import hashlib, time, traceback
 
 _ROOT = Path(__file__).parent.parent
 INCOMING = _ROOT / "data" / "incoming"
@@ -52,7 +52,25 @@ async def upload_csv(
 
     # Run pipeline in background for fast response
     import threading
-    threading.Thread(target=run_pipeline, args=(filename, trigger_source)).start()
+
+    def _run(fn, ts):
+        try:
+            run_pipeline(fn, ts)
+        except Exception:
+            tb = traceback.format_exc()
+            print(f"[HRCA] Pipeline thread crashed:\n{tb}", flush=True)
+            try:
+                set_state(status="error")
+                log_event(
+                    timestamp=datetime.utcnow().isoformat(),
+                    cell="N/A", operator_name="N/A", badge_id="N/A",
+                    conflict_type="thread_crash", alert_sent=0,
+                    trigger_source=ts, alert_text=tb[:2000],
+                )
+            except Exception:
+                pass
+
+    threading.Thread(target=_run, args=(filename, trigger_source)).start()
 
     return JSONResponse({"status": "accepted", "file": filename,
                          "trigger_source": trigger_source})
@@ -101,10 +119,15 @@ def health():
 
 @app.get("/debug")
 def debug():
-    import sys
+    import sys, importlib.metadata
     groq_key = os.getenv("GROQ_API_KEY", "")
+    try:
+        groq_ver = importlib.metadata.version("groq")
+    except Exception:
+        groq_ver = "NOT INSTALLED"
     return {
         "python": sys.version,
+        "groq_version": groq_ver,
         "groq_key_set": bool(groq_key),
         "groq_key_prefix": groq_key[:8] + "..." if groq_key else "NOT SET",
         "llm_model": os.getenv("LLM_MODEL", "llama3-8b-8192"),
