@@ -45,13 +45,12 @@ Rules:
 
 
 def _llm(prompt: str) -> str:
-    """Call Hugging Face Inference API (OpenAI-compatible endpoint)."""
-    model = os.getenv("LLM_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
-    token = os.getenv("HF_API_TOKEN", "")
-    url = "https://api-inference.huggingface.co/v1/chat/completions"
+    """Call Groq REST API (OpenAI-compatible, no SDK needed)."""
+    model = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
+    api_key = os.getenv("GROQ_API_KEY", "")
     resp = _requests.post(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
         json={
             "model": model,
             "messages": [
@@ -59,6 +58,7 @@ def _llm(prompt: str) -> str:
                 {"role": "user", "content": prompt},
             ],
             "max_tokens": 256,
+            "temperature": 0,
         },
         timeout=30,
     )

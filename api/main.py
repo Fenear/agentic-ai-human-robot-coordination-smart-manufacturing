@@ -135,11 +135,11 @@ def health():
 @app.get("/debug")
 def debug():
     import sys
-    hf_token = os.getenv("HF_API_TOKEN", "")
+    groq_key = os.getenv("GROQ_API_KEY", "")
     return {
         "python": sys.version,
-        "llm_backend": "huggingface-rest",
-        "hf_token_set": bool(hf_token),
-        "hf_token_prefix": hf_token[:8] + "..." if hf_token else "NOT SET",
-        "llm_model": os.getenv("LLM_MODEL", "meta-llama/Llama-3.2-3B-Instruct"),
+        "llm_backend": "groq-rest",
+        "groq_key_set": bool(groq_key),
+        "groq_key_prefix": groq_key[:8] + "..." if groq_key else "NOT SET",
+        "llm_model": os.getenv("LLM_MODEL", "llama-3.1-8b-instant"),
     }
