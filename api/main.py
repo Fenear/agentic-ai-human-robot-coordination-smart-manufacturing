@@ -97,3 +97,15 @@ def get_robot_status():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/debug")
+def debug():
+    import sys
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    return {
+        "python": sys.version,
+        "groq_key_set": bool(groq_key),
+        "groq_key_prefix": groq_key[:8] + "..." if groq_key else "NOT SET",
+        "llm_model": os.getenv("LLM_MODEL", "llama3-8b-8192"),
+    }
