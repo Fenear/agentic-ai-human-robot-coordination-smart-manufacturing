@@ -112,6 +112,21 @@ def get_robot_status():
         return json.load(f)
 
 
+@app.post("/run-sync")
+async def run_sync(request: Request):
+    """Debug: run pipeline synchronously and return any exception."""
+    import json
+    body = await request.json()
+    csv_path = body.get("csv_path", "")
+    trigger_source = body.get("trigger_source", "debug")
+    try:
+        run_pipeline(csv_path, trigger_source)
+        return {"status": "ok", "error": None}
+    except Exception:
+        tb = traceback.format_exc()
+        return {"status": "error", "error": tb}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
