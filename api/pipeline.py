@@ -112,7 +112,8 @@ def run_pipeline(csv_path: str, trigger_source: str = "machine"):
                 HumanMessage(content=prompt),
             ])
             alert_text = response.content
-        except Exception:
+        except Exception as llm_exc:
+            print(f"[HRCA] LLM error ({type(llm_exc).__name__}): {llm_exc}", flush=True)
             # Fallback: rule-based alert — never stay silent
             alert_text = (
                 f"⚠️ {cell}: {op['name']} (Badge #{op['badge_id']}) "
