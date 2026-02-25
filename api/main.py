@@ -120,15 +120,15 @@ def health():
 @app.get("/debug")
 def debug():
     import sys, importlib.metadata
-    groq_key = os.getenv("GROQ_API_KEY", "")
+    google_key = os.getenv("GOOGLE_API_KEY", "")
     try:
-        groq_ver = importlib.metadata.version("groq")
+        genai_ver = importlib.metadata.version("google-generativeai")
     except Exception:
-        groq_ver = "NOT INSTALLED"
+        genai_ver = "NOT INSTALLED"
     return {
         "python": sys.version,
-        "groq_version": groq_ver,
-        "groq_key_set": bool(groq_key),
-        "groq_key_prefix": groq_key[:8] + "..." if groq_key else "NOT SET",
-        "llm_model": os.getenv("LLM_MODEL", "llama3-8b-8192"),
+        "google_generativeai_version": genai_ver,
+        "google_key_set": bool(google_key),
+        "google_key_prefix": google_key[:8] + "..." if google_key else "NOT SET",
+        "llm_model": os.getenv("LLM_MODEL", "gemini-1.5-flash"),
     }

@@ -12,8 +12,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import google.generativeai as genai
 from dotenv import load_dotenv, find_dotenv
-from groq import Groq
 
 from tools import check_schedule, check_robot_state
 from alert import send_alert
@@ -43,7 +43,11 @@ Rules:
 - If LLM is unavailable, fall back to rule-based alert — never stay silent
 """
 
-_groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+_model = genai.GenerativeModel(
+    model_name=os.getenv("LLM_MODEL", "gemini-1.5-flash"),
+    system_instruction=SYSTEM_PROMPT,
+)
 
 
 def run_pipeline(csv_path: str, trigger_source: str = "machine"):
@@ -102,15 +106,8 @@ def run_pipeline(csv_path: str, trigger_source: str = "machine"):
                 f"Robot status: ACTIVE\n"
                 f"Write the alert."
             )
-            response = _groq_client.chat.completions.create(
-                model=os.getenv("LLM_MODEL", "llama3-8b-8192"),
-                temperature=0,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            alert_text = response.choices[0].message.content
+            response = _model.generate_content(prompt)
+            alert_text = response.text
         except Exception as llm_exc:
             print(f"[HRCA] LLM error ({type(llm_exc).__name__}): {llm_exc}", flush=True)
             # Fallback: rule-based alert — never stay silent
