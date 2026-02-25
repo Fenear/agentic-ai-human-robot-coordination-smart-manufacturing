@@ -60,7 +60,7 @@ with col1:
         st.success("✅ No Conflicts")
 
 with col2:
-    src = state.get("trigger_source", "—")
+    src = state.get("trigger_source") or "—"
     icon = "🤖" if src == "machine" else "👤"
     st.metric("Last Trigger", f"{icon} {src.capitalize()}")
 
