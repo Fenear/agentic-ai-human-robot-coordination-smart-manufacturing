@@ -13,8 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv, find_dotenv
-from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
+from groq import Groq
 
 from tools import check_schedule, check_robot_state
 from alert import send_alert
@@ -44,11 +43,7 @@ Rules:
 - If LLM is unavailable, fall back to rule-based alert — never stay silent
 """
 
-llm = ChatGroq(
-    model=os.getenv("LLM_MODEL", "llama3-8b-8192"),
-    temperature=0,
-    api_key=os.getenv("GROQ_API_KEY"),
-)
+_groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
 def run_pipeline(csv_path: str, trigger_source: str = "machine"):
@@ -107,11 +102,15 @@ def run_pipeline(csv_path: str, trigger_source: str = "machine"):
                 f"Robot status: ACTIVE\n"
                 f"Write the alert."
             )
-            response = llm.invoke([
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
-            ])
-            alert_text = response.content
+            response = _groq_client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "llama3-8b-8192"),
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            alert_text = response.choices[0].message.content
         except Exception as llm_exc:
             print(f"[HRCA] LLM error ({type(llm_exc).__name__}): {llm_exc}", flush=True)
             # Fallback: rule-based alert — never stay silent
