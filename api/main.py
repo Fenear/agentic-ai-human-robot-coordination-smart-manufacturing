@@ -141,5 +141,5 @@ def debug():
         "llm_backend": "gemini-rest",
         "google_key_set": bool(google_key),
         "google_key_prefix": google_key[:8] + "..." if google_key else "NOT SET",
-        "llm_model": os.getenv("LLM_MODEL", "gemini-1.5-flash"),
+        "llm_model": os.getenv("LLM_MODEL", "gemini-2.0-flash"),
     }

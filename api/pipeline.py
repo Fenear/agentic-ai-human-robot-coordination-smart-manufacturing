@@ -46,7 +46,7 @@ Rules:
 
 def _gemini(prompt: str) -> str:
     """Call Gemini REST API directly — no SDK, no gRPC."""
-    model = os.getenv("LLM_MODEL", "gemini-1.5-flash")
+    model = os.getenv("LLM_MODEL", "gemini-2.0-flash")
     api_key = os.getenv("GOOGLE_API_KEY", "")
     url = (
         f"https://generativelanguage.googleapis.com/v1beta"
