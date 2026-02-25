@@ -7,14 +7,57 @@ API_URL = os.getenv("HRCA_API_URL", st.secrets.get("HRCA_API_URL", "http://local
 st.set_page_config(page_title="HRCA Dashboard", layout="wide", page_icon="🏭")
 st.title("🏭 HRCA — Human-Robot Coordination Agent")
 
-# ── Sidebar: Upload ──────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────
 with st.sidebar:
+
+    # ── Robot Cell Status ─────────────────────────────────────
+    st.header("🤖 Robot Cell Status")
+    st.caption("Set which cells are currently active before uploading")
+
+    # Fetch current status
+    try:
+        current_robot = requests.get(f"{API_URL}/robot-status", timeout=3).json()
+    except Exception:
+        current_robot = {}
+
+    all_cells = ["cell_3", "cell_5", "cell_7", "cell_9", "cell_14"]
+    cell_states = {}
+    for cell in all_cells:
+        current = current_robot.get(cell, "idle") == "active"
+        cell_states[cell] = st.checkbox(
+            f"{cell.replace('_', ' ').title()} — Active",
+            value=current,
+            key=f"cb_{cell}",
+        )
+
+    if st.button("💾 Update Robot Status", use_container_width=True):
+        payload = {c: ("active" if v else "idle") for c, v in cell_states.items()}
+        try:
+            r = requests.post(
+                f"{API_URL}/robot-status",
+                json=payload,
+                timeout=5,
+            )
+            if r.status_code == 200:
+                st.success("✅ Robot status updated")
+            else:
+                st.error("Failed to update robot status")
+        except Exception:
+            st.error("❌ Cannot reach API")
+
+    st.divider()
+
+    # ── Upload Shift Schedule ─────────────────────────────────
     st.header("📂 Upload Shift Schedule")
     st.caption("Supervisor manual upload — or MES uploads automatically via API")
     uploaded = st.file_uploader("shift_schedule.csv", type=["csv"])
     if uploaded:
         with st.spinner("Sending to pipeline..."):
             try:
+                # Refresh robot status mtime so staleness check passes
+                payload = {c: ("active" if v else "idle") for c, v in cell_states.items()}
+                requests.post(f"{API_URL}/robot-status", json=payload, timeout=5)
+
                 r = requests.post(
                     f"{API_URL}/upload",
                     files={"file": (uploaded.name, uploaded.getvalue(), "text/csv")},
