@@ -44,6 +44,22 @@ except Exception:
     events = []
     api_online = False
 
+# ── Toast notifications for new conflicts ─────────────────────
+if "last_notified_id" not in st.session_state:
+    st.session_state.last_notified_id = 0
+
+new_conflicts = [
+    e for e in events
+    if e["conflict_type"] == "zone_overlap"
+    and e["id"] > st.session_state.last_notified_id
+]
+for e in new_conflicts:
+    st.toast(
+        f"⚠️ **{e['cell'].upper()}** — {e['operator_name']} (Badge #{e['badge_id']}) in active robot zone",
+        icon="🚨",
+    )
+    st.session_state.last_notified_id = max(st.session_state.last_notified_id, e["id"])
+
 # ── Status Banner ─────────────────────────────────────────────
 col1, col2, col3 = st.columns(3)
 

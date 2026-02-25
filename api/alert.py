@@ -55,9 +55,10 @@ def _send_email(message: str) -> bool:
 
 
 def send_alert(message: str) -> bool:
-    """Try Slack first, fall back to email. Returns True if sent."""
-    if _send_slack(message):
-        return True
-    if _send_email(message):
-        return True
-    return False  # both failed — pipeline logs this
+    """Try Slack first, fall back to email, fall back to UI dashboard."""
+    if SLACK_WEBHOOK_URL:
+        return _send_slack(message)
+    if all([SMTP_USER, SMTP_PASSWORD, ALERT_EMAIL_TO]):
+        return _send_email(message)
+    # No external channel configured — Streamlit dashboard is the notification
+    return True
