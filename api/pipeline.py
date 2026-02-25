@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-import google.generativeai as genai
+import requests as _requests
 from dotenv import load_dotenv, find_dotenv
 
 from tools import check_schedule, check_robot_state
@@ -43,11 +43,22 @@ Rules:
 - If LLM is unavailable, fall back to rule-based alert — never stay silent
 """
 
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-_model = genai.GenerativeModel(
-    model_name=os.getenv("LLM_MODEL", "gemini-1.5-flash"),
-    system_instruction=SYSTEM_PROMPT,
-)
+
+def _gemini(prompt: str) -> str:
+    """Call Gemini REST API directly — no SDK, no gRPC."""
+    model = os.getenv("LLM_MODEL", "gemini-1.5-flash")
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta"
+        f"/models/{model}:generateContent"
+    )
+    payload = {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"parts": [{"text": prompt}]}],
+    }
+    resp = _requests.post(url, params={"key": api_key}, json=payload, timeout=30)
+    resp.raise_for_status()
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def run_pipeline(csv_path: str, trigger_source: str = "machine"):
@@ -106,8 +117,7 @@ def run_pipeline(csv_path: str, trigger_source: str = "machine"):
                 f"Robot status: ACTIVE\n"
                 f"Write the alert."
             )
-            response = _model.generate_content(prompt)
-            alert_text = response.text
+            alert_text = _gemini(prompt)
         except Exception as llm_exc:
             print(f"[HRCA] LLM error ({type(llm_exc).__name__}): {llm_exc}", flush=True)
             # Fallback: rule-based alert — never stay silent

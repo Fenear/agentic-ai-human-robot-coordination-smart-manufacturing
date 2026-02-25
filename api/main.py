@@ -134,15 +134,11 @@ def health():
 
 @app.get("/debug")
 def debug():
-    import sys, importlib.metadata
+    import sys
     google_key = os.getenv("GOOGLE_API_KEY", "")
-    try:
-        genai_ver = importlib.metadata.version("google-generativeai")
-    except Exception:
-        genai_ver = "NOT INSTALLED"
     return {
         "python": sys.version,
-        "google_generativeai_version": genai_ver,
+        "llm_backend": "gemini-rest",
         "google_key_set": bool(google_key),
         "google_key_prefix": google_key[:8] + "..." if google_key else "NOT SET",
         "llm_model": os.getenv("LLM_MODEL", "gemini-1.5-flash"),
